@@ -129,8 +129,43 @@ def extract_cells(image_path, num_lines, debug=False):
             cells.append(normalize_character_soft(cell_raw, h_step))
     return np.array(cells)
 
+def parse_training_file(path, line_offset):
+    """
+    Parses a text file, validating line lengths and alphabet contents.
+    line_offset: Used to report correct (1,1) indexed image grid coordinates.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Training file not found: {path}")
+    
+    with open(path, "r", encoding="utf-8") as f:
+        # We use splitlines to preserve individual line integrity
+        raw_lines = f.read().splitlines()
+    
+    # Filter out trailing empty lines, but keep internal ones if they exist
+    while raw_lines and not raw_lines[-1].strip():
+        raw_lines.pop()
+
+    labels = []
+    char_to_idx = {c: i for i, c in enumerate(ALPHABET)}
+
+    for r_idx, line in enumerate(raw_lines):
+        if len(line) != EXPECTED_COLS:
+            raise ValueError(
+                f"Format Error in {path}: Line {r_idx + 1} (Grid Line {r_idx + 1 + line_offset}) "
+                f"has length {len(line)}, but expected {EXPECTED_COLS}."
+            )
+        
+        for c_idx, char in enumerate(line):
+            if char not in char_to_idx:
+                raise ValueError(
+                    f"Alphabet Error in {path}: Invalid character '{char}' "
+                    f"at Grid Coordinate ({r_idx + 1 + line_offset}, {c_idx + 1})."
+                )
+            labels.append(char_to_idx[char])
+            
+    return np.array(labels), len(raw_lines)
+
 def calculate_bucket_averages(visuals, labels):
-    """Calculates the mean image for each cluster label."""
     averages = np.zeros((CLUSTERS, 32, 32), dtype=np.uint8)
     for i in range(CLUSTERS):
         mask = (labels == i)
@@ -145,12 +180,12 @@ def show_outliers(visuals, labels, ref_averages, title, model_preds=None):
         mask = (labels == i)
         indices = np.where(mask)[0]
         if len(indices) == 0:
-            ax_f[i].axis('off'); continue
+            if i < len(ax_f): ax_f[i].axis('off')
+            continue
 
         avg_img = ref_averages[i]
         subset_cells = visuals[indices].astype(float)
         ref_float = avg_img.astype(float)
-        # Mean Squared Error to find most deviant
         mse = np.mean((subset_cells - ref_float)**2, axis=(1, 2))
         worst_idx_in_group = np.argmax(mse)
         global_idx = indices[worst_idx_in_group]
@@ -172,41 +207,58 @@ def show_outliers(visuals, labels, ref_averages, title, model_preds=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("image")
-    parser.add_argument("train_path", nargs='?', default=None)
+    parser.add_argument("image", help="Path to input image")
+    parser.add_argument("train_path", nargs='?', default=None, help="Top N lines of ground truth")
+    parser.add_argument("bottom_train_path", nargs='?', default=None, help="Optional: Bottom N lines of ground truth")
     parser.add_argument("-d", "--debug", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
-    parser.add_argument("--lines", type=int, default=65)
+    parser.add_argument("--lines", type=int, default=65, help="Total grid lines in image")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SimpleCNN(CLUSTERS).to(device)
+    
     visuals = extract_cells(args.image, args.lines, debug=args.debug)
     if visuals is None: return
 
-    # This will hold the "Ground Truth" averages if we are in training mode
-    ground_truth_averages = None
-    gt_labels = None
+    gt_labels_list = []
+    gt_visuals_list = []
 
     if args.train_path:
-        # --- TRAINING MODE ---
-        with open(args.train_path, "r", encoding="utf-8") as f:
-            train_text = f.read().replace('\n', '').replace('\r', '')
-        n_train = min(len(train_text), len(visuals))
-        char_to_idx = {c: i for i, c in enumerate(ALPHABET)}
-        gt_labels = np.array([char_to_idx.get(c, char_to_idx[' ']) for c in train_text[:n_train]])
+        # Process Top Training File
+        labels_top, n_lines_top = parse_training_file(args.train_path, 0)
+        gt_labels_list.append(labels_top)
+        gt_visuals_list.append(visuals[:n_lines_top * EXPECTED_COLS])
+        log(f"Loaded {n_lines_top} lines from top training file.")
 
-        # Calculate averages based on Ground Truth labels
-        ground_truth_averages = calculate_bucket_averages(visuals[:n_train], gt_labels)
+        if args.bottom_train_path:
+            # First peek at the file to see how many lines it has to calculate offset
+            with open(args.bottom_train_path, "r", encoding="utf-8") as f:
+                n_lines_bot = len([l for l in f.read().splitlines() if l.strip()])
+            
+            offset = args.lines - n_lines_bot
+            if offset < n_lines_top:
+                log("Warning: Top and Bottom training sets overlap.")
+            
+            labels_bot, _ = parse_training_file(args.bottom_train_path, offset)
+            gt_labels_list.append(labels_bot)
+            gt_visuals_list.append(visuals[offset * EXPECTED_COLS : (offset + n_lines_bot) * EXPECTED_COLS])
+            log(f"Loaded {n_lines_bot} lines from bottom training file (Offset: {offset}).")
 
+        # Combine training data
+        all_gt_labels = np.concatenate(gt_labels_list)
+        all_gt_visuals = np.concatenate(gt_visuals_list)
+        
+        # Calculate averages for debugging
+        ground_truth_averages = calculate_bucket_averages(all_gt_visuals, all_gt_labels)
         if args.debug:
-            show_outliers(visuals[:n_train], gt_labels, ground_truth_averages,
-                          "TRAINING MISTAKES CHECK: Ground Truth Avg vs Most Deviant")
+            show_outliers(all_gt_visuals, all_gt_labels, ground_truth_averages,
+                          "TRAINING DATA: Avg vs Most Deviant")
 
         # Training Loop
-        X = torch.tensor(visuals[:n_train], dtype=torch.float32).unsqueeze(1) / 255.0
-        Y = torch.tensor(gt_labels, dtype=torch.long)
-        train_idx, val_idx = train_test_split(np.arange(n_train), test_size=0.1, random_state=42)
+        X = torch.tensor(all_gt_visuals, dtype=torch.float32).unsqueeze(1) / 255.0
+        Y = torch.tensor(all_gt_labels, dtype=torch.long)
+        train_idx, val_idx = train_test_split(np.arange(len(Y)), test_size=0.1, random_state=42)
         train_loader = DataLoader(TensorDataset(X[train_idx], Y[train_idx]), batch_size=64, shuffle=True)
 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -222,12 +274,11 @@ def main():
 
         torch.save(model.state_dict(), WEIGHTS_PATH)
     else:
-        # --- INFERENCE MODE ---
         if not os.path.exists(WEIGHTS_PATH):
-            log("Error: Weights not found."); return
+            log("Error: Weights not found. Provide a training file to generate them."); return
         model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
 
-    # --- INFERENCE / PREDICTION PHASE ---
+    # --- INFERENCE ---
     model.eval()
     X_all = torch.tensor(visuals, dtype=torch.float32).unsqueeze(1).to(device) / 255.0
     all_preds = []
@@ -241,16 +292,14 @@ def main():
             row = pred_indices[r*EXPECTED_COLS : (r+1)*EXPECTED_COLS]
             sys.stdout.write("".join([ALPHABET[i] for i in row]) + "\n")
 
-    # --- FINAL DEBUGGING COMPARISON ---
-    if ground_truth_averages is not None:
-        show_outliers(visuals, pred_indices, ground_truth_averages,
-                      "Training Averages vs Inference Outliers", model_preds=pred_indices)
-    else:
-        # If we loaded weights, we have no GT. We compare model predictions against
-        # averages derived from those same predictions (inf_averages).
-        inf_averages = calculate_bucket_averages(visuals, pred_indices)
-        show_outliers(visuals, pred_indices, inf_averages,
-                      "Inference Bucket Deviations (Averages vs Outliers)")
+    # Final visual check
+    inf_averages = calculate_bucket_averages(visuals, pred_indices)
+    if args.debug:
+        show_outliers(visuals, pred_indices, inf_averages, "Inference Bucket Deviations")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, FileNotFoundError) as e:
+        log(str(e))
+        sys.exit(1)
