@@ -37,36 +37,41 @@ def log(msg):
 class SimpleCNN(nn.Module):
     def __init__(self, num_classes):
         super(SimpleCNN, self).__init__()
-        # Increasing to 3 blocks to capture more complex shapes
+        # Input is 1 (gray) + 2 (coords) = 3 channels
         self.conv = nn.Sequential(
-            # Block 1: 32x32 -> 16x16
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d(2),
+            nn.MaxPool2d(2), # 16x16
 
-            # Block 2: 16x16 -> 8x8
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.MaxPool2d(2),
+            nn.MaxPool2d(2), # 8x8
 
-            # Block 3: 8x8 -> 4x4
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.MaxPool2d(2)
+            # We stop pooling here to keep an 8x8 grid for high-detail spatial features
         )
 
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(128 * 4 * 4, 512),
+            nn.Linear(128 * 8 * 8, 512),
             nn.ReLU(),
-            nn.Dropout(0.3),  # Helps the model generalize better
+            nn.Dropout(0.2), # Generalizes better
             nn.Linear(512, num_classes)
         )
 
+    def add_coords(self, x):
+        # Generates X and Y coordinate maps from -1 to 1
+        bs, _, h, w = x.size()
+        xx = torch.linspace(-1, 1, w, device=x.device).view(1, 1, 1, w).expand(bs, 1, h, w)
+        yy = torch.linspace(-1, 1, h, device=x.device).view(1, 1, h, 1).expand(bs, 1, h, w)
+        return torch.cat([x, xx, yy], dim=1)
+
     def forward(self, x):
+        x = self.add_coords(x)
         return self.fc(self.conv(x))
 
 def normalize_character_soft(raw_cell, h_step):
@@ -265,7 +270,7 @@ def main():
 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
         criterion = nn.CrossEntropyLoss()
-        for epoch in range(40):
+        for epoch in range(30):
             model.train()
             l_sum = 0
             for xb, yb in train_loader:
