@@ -286,7 +286,7 @@ def calculate_bucket_averages(visuals, labels):
 
 
 def show_outliers(
-    visuals, labels, ref_averages, title, model_preds=None, save_path=None
+    visuals, labels, ref_averages, title, model_preds=None, save_path=None, indices_map=None
 ):
     fig, axes = plt.subplots(6, 11, figsize=(18, 11))
     ax_f = axes.flatten()
@@ -306,7 +306,8 @@ def show_outliers(
         global_idx = indices[worst_idx_in_group]
         outlier_img = visuals[global_idx]
 
-        line, col = (global_idx // EXPECTED_COLS) + 1, (global_idx % EXPECTED_COLS) + 1
+        actual_idx = indices_map[global_idx] if indices_map is not None else global_idx
+        line, col = (actual_idx // EXPECTED_COLS) + 1, (actual_idx % EXPECTED_COLS) + 1
         meta = ""
         if model_preds is not None:
             pred_char = ALPHABET[model_preds[global_idx]]
@@ -373,10 +374,12 @@ def main():
         # --- TRAINING MODE ---
         gt_labels_list = []
         gt_visuals_list = []
+        gt_indices_list = []
 
         labels_top, n_lines_top = parse_training_file(args.train_path, 0)
         gt_labels_list.append(labels_top)
         gt_visuals_list.append(visuals[: n_lines_top * EXPECTED_COLS])
+        gt_indices_list.append(np.arange(0, n_lines_top * EXPECTED_COLS))
         log(f"Loaded {n_lines_top} lines from top training file.")
 
         if args.bottom_train_path:
@@ -389,10 +392,12 @@ def main():
             gt_visuals_list.append(
                 visuals[offset * EXPECTED_COLS : (offset + n_lines_bot) * EXPECTED_COLS]
             )
+            gt_indices_list.append(np.arange(offset * EXPECTED_COLS, (offset + n_lines_bot) * EXPECTED_COLS))
             log(f"Loaded {n_lines_bot} lines from bottom training file.")
 
         all_gt_labels = np.concatenate(gt_labels_list)
         all_gt_visuals = np.concatenate(gt_visuals_list)
+        all_gt_indices = np.concatenate(gt_indices_list)
 
         ground_truth_averages = calculate_bucket_averages(all_gt_visuals, all_gt_labels)
         if args.debug:
@@ -401,6 +406,7 @@ def main():
                 all_gt_labels,
                 ground_truth_averages,
                 "TRAINING TYPO CHECK: Avg vs Max Outlier",
+                indices_map=all_gt_indices
             )
 
         X = torch.tensor(all_gt_visuals, dtype=torch.float32).unsqueeze(1) / 255.0
