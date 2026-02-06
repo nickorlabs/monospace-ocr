@@ -79,8 +79,20 @@ class SimpleCNN(nn.Module):
 def normalize_character_soft(raw_cell, h_step):
     if raw_cell.size == 0: return np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
     clean_cell = raw_cell.copy()
-    clean_cell[:, 0] = 0
+    clean_cell[:, 0] = 0 # Clear potential grid lines
     _, mask = cv2.threshold(clean_cell, 25, 255, cv2.THRESH_BINARY)
+
+    # # NEW: Filter for the largest component to ignore specks/dust
+    # num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    # if num_labels <= 1: return np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
+    #
+    # # Label 0 is background; find the largest foreground blob
+    # largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+    # mask = (labels == largest_label).astype(np.uint8) * 255
+    #
+    # # Zero out everything in clean_cell that isn't the main character
+    # clean_cell[mask == 0] = 0
+
     coords = cv2.findNonZero(mask)
     canvas = np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
     if coords is None: return canvas
@@ -322,18 +334,21 @@ def main():
 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
         criterion = nn.CrossEntropyLoss()
-        for epoch in range(30):
+        for epoch in range(50):
             model.train()
             l_sum = 0
-            for xb, yb in train_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                if random.random() > 0.5:
-                    shift_x = random.randint(-1, 1)
-                    shift_y = random.randint(-1, 1)
-                    xb = torch.roll(xb, shifts=(shift_y, shift_x), dims=(2, 3))
-                optimizer.zero_grad(); loss = criterion(model(xb), yb)
-                loss.backward(); optimizer.step(); l_sum += loss.item()
-            log(f"Epoch {epoch+1:02d} | Loss: {l_sum/len(train_loader):.4f}")
+            # Loop twice per epoch: once for clean ground truth, once for augmented shifts
+            # for augmented_pass in [False, True]:
+            for augmented_pass in [False]:
+                for xb, yb in train_loader:
+                    xb, yb = xb.to(device), yb.to(device)
+                    if augmented_pass:
+                        shift_x = random.randint(-1, 1)
+                        shift_y = random.randint(-1, 1)
+                        xb = torch.roll(xb, shifts=(shift_y, shift_x), dims=(2, 3))
+                    optimizer.zero_grad(); loss = criterion(model(xb), yb)
+                    loss.backward(); optimizer.step(); l_sum += loss.item()
+            log(f"Epoch {epoch+1:02d} | Loss: {l_sum/(2*len(train_loader)):.4f}")
 
         # Save Weights
         torch.save(model.state_dict(), WEIGHTS_PATH)
