@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 import random
 import argparse
+import json
 
 # --- DETERMINISM ---
 def set_seed(seed=42):
@@ -30,6 +31,7 @@ CLUSTERS = len(ALPHABET)
 EXPECTED_COLS = 78
 TARGET_CELL_SIZE = (32, 32)
 WEIGHTS_PATH = "./weights"
+CONFIG_PATH = "./grid_config.json"
 
 def log(msg):
     print(msg, file=sys.stderr, flush=True)
@@ -104,17 +106,25 @@ def solve_grid_2d(img, gx, gy, gw, gh, num_lines):
     x_s, w_t = score_axis(x_proj, EXPECTED_COLS, gx, gw)
     return x_s, y_s, w_t, h_t
 
-def extract_cells(image_path, num_lines, debug=False):
+def extract_cells(image_path, num_lines, grid_params=None, debug=False):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None: return None
+    if img is None: return None, None
     bg = np.median(img)
     inv = cv2.absdiff(img, int(bg))
-    _, mask = cv2.threshold(inv, 10, 255, cv2.THRESH_BINARY)
-    coords = cv2.findNonZero(mask)
-    if coords is None: return None
-    gx, gy, gw, gh = cv2.boundingRect(coords)
-    xs, ys, wt, ht = solve_grid_2d(inv, gx, gy, gw, gh, num_lines)
+
+    if grid_params:
+        xs, ys, wt, ht = grid_params
+        log(f"Using cached grid: x={xs}, y={ys}, w={wt}, h={ht}")
+    else:
+        _, mask = cv2.threshold(inv, 10, 255, cv2.THRESH_BINARY)
+        coords = cv2.findNonZero(mask)
+        if coords is None: return None, None
+        gx, gy, gw, gh = cv2.boundingRect(coords)
+        xs, ys, wt, ht = solve_grid_2d(inv, gx, gy, gw, gh, num_lines)
+        log(f"Detected new grid: x={xs}, y={ys}, w={wt}, h={ht}")
+
     w_step, h_step = wt / EXPECTED_COLS, ht / num_lines
+
     if debug:
         dbg = cv2.cvtColor(inv, cv2.COLOR_GRAY2BGR)
         for r in range(num_lines + 1):
@@ -124,6 +134,7 @@ def extract_cells(image_path, num_lines, debug=False):
             x = int(xs + c * w_step)
             cv2.line(dbg, (x, int(ys)), (x, int(ys + ht)), (0, 255, 0), 1)
         plt.figure(figsize=(8, 8)); plt.imshow(dbg); plt.title("Grid Overlay"); plt.show()
+
     cells = []
     for r in range(num_lines):
         for c in range(EXPECTED_COLS):
@@ -131,7 +142,8 @@ def extract_cells(image_path, num_lines, debug=False):
             x1, x2 = int(xs + c * w_step), int(xs + (c + 1) * w_step)
             cell_raw = inv[max(0,y1):y2, max(0,x1):x2]
             cells.append(normalize_character_soft(cell_raw, h_step))
-    return np.array(cells)
+
+    return np.array(cells), (xs, ys, wt, ht)
 
 def parse_training_file(path, line_offset):
     if not os.path.exists(path):
@@ -217,13 +229,25 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SimpleCNN(CLUSTERS).to(device)
 
-    visuals = extract_cells(args.image, args.lines, debug=args.debug)
+    # Determine if we should load a memorized grid
+    grid_params = None
+    if not args.train_path and os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cfg = json.load(f)
+                grid_params = (cfg['xs'], cfg['ys'], cfg['wt'], cfg['ht'])
+                log("Loaded grid configuration from file.")
+        except Exception as e:
+            log(f"Warning: Could not load config: {e}. Re-detecting grid.")
+
+    visuals, detected_params = extract_cells(args.image, args.lines, grid_params=grid_params, debug=args.debug)
     if visuals is None: return
 
-    gt_labels_list = []
-    gt_visuals_list = []
-
     if args.train_path:
+        # --- TRAINING MODE ---
+        gt_labels_list = []
+        gt_visuals_list = []
+
         labels_top, n_lines_top = parse_training_file(args.train_path, 0)
         gt_labels_list.append(labels_top)
         gt_visuals_list.append(visuals[:n_lines_top * EXPECTED_COLS])
@@ -234,13 +258,10 @@ def main():
                 n_lines_bot = len([l for l in f.read().splitlines() if l.strip()])
 
             offset = args.lines - n_lines_bot
-            if offset < n_lines_top:
-                log("Warning: Top and Bottom training sets overlap.")
-
             labels_bot, _ = parse_training_file(args.bottom_train_path, offset)
             gt_labels_list.append(labels_bot)
             gt_visuals_list.append(visuals[offset * EXPECTED_COLS : (offset + n_lines_bot) * EXPECTED_COLS])
-            log(f"Loaded {n_lines_bot} lines from bottom training file (Offset: {offset}).")
+            log(f"Loaded {n_lines_bot} lines from bottom training file.")
 
         all_gt_labels = np.concatenate(gt_labels_list)
         all_gt_visuals = np.concatenate(gt_visuals_list)
@@ -252,7 +273,7 @@ def main():
 
         X = torch.tensor(all_gt_visuals, dtype=torch.float32).unsqueeze(1) / 255.0
         Y = torch.tensor(all_gt_labels, dtype=torch.long)
-        train_idx, val_idx = train_test_split(np.arange(len(Y)), test_size=0.1, random_state=42)
+        train_idx, _ = train_test_split(np.arange(len(Y)), test_size=0.1, random_state=42)
         train_loader = DataLoader(TensorDataset(X[train_idx], Y[train_idx]), batch_size=64, shuffle=True)
 
         optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -266,13 +287,23 @@ def main():
                 loss.backward(); optimizer.step(); l_sum += loss.item()
             log(f"Epoch {epoch+1:02d} | Loss: {l_sum/len(train_loader):.4f}")
 
+        # Save Weights
         torch.save(model.state_dict(), WEIGHTS_PATH)
+        # Save Grid Config (Memorization)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump({
+                'xs': float(detected_params[0]),
+                'ys': float(detected_params[1]),
+                'wt': float(detected_params[2]),
+                'ht': float(detected_params[3])
+            }, f)
+        log(f"Memorized grid and saved weights.")
     else:
+        # --- INFERENCE MODE ---
         if not os.path.exists(WEIGHTS_PATH):
             log("Error: Weights not found. Provide a training file to generate them."); return
         model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
 
-    # --- INFERENCE ---
     model.eval()
     X_all = torch.tensor(visuals, dtype=torch.float32).unsqueeze(1).to(device) / 255.0
     all_preds = []
@@ -282,7 +313,6 @@ def main():
     pred_indices = np.concatenate(all_preds)
 
     if not args.quiet:
-        # Redirect output if -o is provided
         out_f = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
         try:
             for r in range(args.lines):
@@ -292,8 +322,8 @@ def main():
             if args.output:
                 out_f.close()
 
-    inf_averages = calculate_bucket_averages(visuals, pred_indices)
     if args.debug:
+        inf_averages = calculate_bucket_averages(visuals, pred_indices)
         show_outliers(visuals, pred_indices, inf_averages, "Inference Bucket Deviations")
 
 if __name__ == "__main__":
