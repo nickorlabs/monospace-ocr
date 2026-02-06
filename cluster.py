@@ -320,6 +320,10 @@ def main():
             l_sum = 0
             for xb, yb in train_loader:
                 xb, yb = xb.to(device), yb.to(device)
+                if random.random() > 0.5:
+                    shift_x = random.randint(-1, 1)
+                    shift_y = random.randint(-1, 1)
+                    xb = torch.roll(xb, shifts=(shift_y, shift_x), dims=(2, 3))
                 optimizer.zero_grad(); loss = criterion(model(xb), yb)
                 loss.backward(); optimizer.step(); l_sum += loss.item()
             log(f"Epoch {epoch+1:02d} | Loss: {l_sum/len(train_loader):.4f}")
