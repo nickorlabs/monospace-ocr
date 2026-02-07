@@ -119,7 +119,8 @@ def normalize_character_soft(raw_cell, h_step):
     if nw > 30 or nh > 30:
         f = 30.0 / max(nw, nh)
         nw, nh = int(nw * f), int(nh * f)
-    resized = cv2.resize(char_crop, (nw, nh), interpolation=cv2.INTER_AREA)
+    interp = cv2.INTER_NEAREST if scale > 1.0 else cv2.INTER_AREA
+    resized = cv2.resize(char_crop, (nw, nh), interpolation=interp)
     rel_y_offset = by / h_step
     target_y = int(rel_y_offset * 32)
     target_x = (32 - nw) // 2
