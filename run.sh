@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 
 set UV uv
-if uname -r | string match -qi "microsoft"
+if uname -r | string match -eqi "microsoft"
     set UV uv.exe
 end
 
