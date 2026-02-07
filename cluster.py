@@ -45,23 +45,26 @@ class SimpleCNN(nn.Module):
         super(SimpleCNN, self).__init__()
         # Input is 1 (gray) + 2 (coords) = 3 channels
         self.conv = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=5, padding=2),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(3, 48, kernel_size=3, padding=1),
+            nn.BatchNorm2d(48),
+            nn.ReLU(),
+            nn.Conv2d(48, 48, kernel_size=3, padding=1),
+            nn.BatchNorm2d(48),
             nn.ReLU(),
             nn.MaxPool2d(2),  # 16x16
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(48, 96, kernel_size=3, padding=1),
+            nn.BatchNorm2d(96),
             nn.ReLU(),
             nn.MaxPool2d(2),  # 8x8
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(96, 192, kernel_size=3, padding=1),
+            nn.BatchNorm2d(192),
             nn.ReLU(),
             # We stop pooling here to keep an 8x8 grid for high-detail spatial features
         )
 
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(128 * 8 * 8, 512),
+            nn.Linear(192 * 8 * 8, 512),
             nn.ReLU(),
             nn.Dropout(0.2),  # Generalizes better
             nn.Linear(512, num_classes),
@@ -440,6 +443,8 @@ def main():
                     if augmented_pass:
                         shift_x = random.randint(-1, 1)
                         shift_y = random.randint(-1, 1)
+                        # shift_x = random.randint(-2, 2)
+                        # shift_y = random.randint(-2, 2)
                         xb = torch.roll(xb, shifts=(shift_y, shift_x), dims=(2, 3))
                     optimizer.zero_grad()
                     loss = criterion(model(xb), yb)
