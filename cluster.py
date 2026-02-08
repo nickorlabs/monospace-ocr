@@ -95,19 +95,12 @@ def normalize_character_soft(raw_cell, h_step):
     if raw_cell.size == 0:
         return np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
     clean_cell = raw_cell.copy()
-    clean_cell[:, 0] = 0  # Clear potential grid lines
-    _, mask = cv2.threshold(clean_cell, 25, 255, cv2.THRESH_BINARY)
-
-    # # NEW: Filter for the largest component to ignore specks/dust
-    # num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-    # if num_labels <= 1: return np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
-    #
-    # # Label 0 is background; find the largest foreground blob
-    # largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-    # mask = (labels == largest_label).astype(np.uint8) * 255
-    #
-    # # Zero out everything in clean_cell that isn't the main character
-    # clean_cell[mask == 0] = 0
+    # Clear infringing content from neighboring cell
+    clean_cell[:, 0] = 0
+    # Denoise the input. This needs to be a careful balancing act.
+    # Raising the first parameter preserves both more detail and noise.
+    # Lowering it strengthens the denoising but loses detail.
+    _, mask = cv2.threshold(clean_cell, 30, 255, cv2.THRESH_BINARY)
 
     coords = cv2.findNonZero(mask)
     canvas = np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
