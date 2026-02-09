@@ -29,7 +29,7 @@ def set_seed(seed=42):
 
 set_seed(42)
 
-ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/> -\":;=."
+ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/> -":;=.'
 CLUSTERS = len(ALPHABET)
 EXPECTED_COLS = 78
 TARGET_CELL_SIZE = (32, 32)
@@ -313,7 +313,7 @@ def parse_training_file(path, line_offset):
         for c_idx, char in enumerate(line):
             # Use `#` (in training file) and `-` (internally) as placeholders for
             # characters we're not sure about and want to skip training against.
-            if char == '#':
+            if char == "#":
                 labels.append(-1)
                 continue
             if char not in char_to_idx:
@@ -334,7 +334,13 @@ def calculate_bucket_averages(visuals, labels):
 
 
 def show_outliers(
-    visuals, labels, ref_averages, title, model_preds=None, save_path=None, indices_map=None
+    visuals,
+    labels,
+    ref_averages,
+    title,
+    model_preds=None,
+    save_path=None,
+    indices_map=None,
 ):
     n_cols = 11
     n_rows = (CLUSTERS + n_cols - 1) // n_cols
@@ -454,7 +460,11 @@ def main():
             gt_visuals_list.append(
                 visuals[offset * EXPECTED_COLS : (offset + n_lines_bot) * EXPECTED_COLS]
             )
-            gt_indices_list.append(np.arange(offset * EXPECTED_COLS, (offset + n_lines_bot) * EXPECTED_COLS))
+            gt_indices_list.append(
+                np.arange(
+                    offset * EXPECTED_COLS, (offset + n_lines_bot) * EXPECTED_COLS
+                )
+            )
             log(f"Loaded {n_lines_bot} lines from bottom training file.")
 
         all_gt_labels = np.concatenate(gt_labels_list)
@@ -474,7 +484,7 @@ def main():
                 all_gt_labels,
                 ground_truth_averages,
                 "TRAINING TYPO CHECK: Avg vs Max Outlier",
-                indices_map=all_gt_indices
+                indices_map=all_gt_indices,
             )
             log(f"Max bucket deviation: {max_dev:.2f}")
 
@@ -501,10 +511,10 @@ def main():
                         shift_x = random.uniform(-2.0, 2.0)
                         shift_y = random.uniform(-2.0, 2.0)
                         N, C, H, W = xb.size()
-                        theta = torch.tensor([[
-                            [1, 0, -2 * shift_x / W],
-                            [0, 1, -2 * shift_y / H]
-                        ]], device=xb.device).repeat(N, 1, 1)
+                        theta = torch.tensor(
+                            [[[1, 0, -2 * shift_x / W], [0, 1, -2 * shift_y / H]]],
+                            device=xb.device,
+                        ).repeat(N, 1, 1)
 
                         grid = tf.affine_grid(theta, xb.size(), align_corners=False)
                         xb = tf.grid_sample(xb, grid, align_corners=False)
