@@ -91,40 +91,66 @@ class SimpleCNN(nn.Module):
         return self.fc(self.conv(x))
 
 
+# Here the pixels have been inverted (white text on black background)
+# This means that thresholding is already inverted! Lower values are
+# WHITE not BLACK.
 def normalize_character_soft(raw_cell, h_step):
     if raw_cell.size == 0:
         return np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
-    clean_cell = raw_cell.copy()
-    # Clear infringing content from neighboring cell
-    clean_cell[:, 0] = 0
-    # Denoise the input. This needs to be a careful balancing act.
-    # Raising the first parameter preserves both more detail and noise.
-    # Lowering it strengthens the denoising but loses detail.
-    _, mask = cv2.threshold(clean_cell, 30, 255, cv2.THRESH_BINARY)
 
-    coords = cv2.findNonZero(mask)
+    # Wipe the left gutter to prevent gutter-line contamination.
+    # Note: we can't do that to the right without clipping characters!
+    base_cell = raw_cell.copy()
+    base_cell[:, 0] = 0
+
+    # Use a high threshold to find only the most reliable, solid ink.
+    # This prevents faint speckles from shifting the character's baseline,
+    # but we won't pass this heavily denoised input to the CNN.
+    # The higher the second parameter the heavier the denoising.
+    _, hard_mask = cv2.threshold(base_cell, 110, 255, cv2.THRESH_BINARY)
+    coords = cv2.findNonZero(hard_mask)
+
     canvas = np.zeros(TARGET_CELL_SIZE, dtype=np.uint8)
     if coords is None:
         return canvas
+
+    # Get the bounding box of the hard-denoised cell
     bx, by, bw, bh = cv2.boundingRect(coords)
-    char_crop = clean_cell[by : by + bh, bx : bx + bw]
+
+    # Crop the original cell using the coordinates from the hard-denoised one.
+    # Use a small 2px safety padding to ensure subpixel hints aren't clipped.
+    pad = 2
+    y1, y2 = max(0, by - pad), min(base_cell.shape[0], by + bh + pad)
+    x1, x2 = max(0, bx - pad), min(base_cell.shape[1], bx + bw + pad)
+
+    char_crop = base_cell[y1:y2, x1:x2]
+    curr_h, curr_w = char_crop.shape
+
+    # Scale based on the expected row height (h_step) to keep character sizes consistent
     scale = 28.0 / h_step
-    nw, nh = max(1, int(bw * scale)), max(1, int(bh * scale))
+    nw, nh = max(1, int(curr_w * scale)), max(1, int(curr_h * scale))
+
+    # Force fit into 32x32 if necessary
     if nw > 30 or nh > 30:
         f = 30.0 / max(nw, nh)
         nw, nh = int(nw * f), int(nh * f)
-    interp = cv2.INTER_NEAREST if scale > 1.0 else cv2.INTER_AREA
-    resized = cv2.resize(char_crop, (nw, nh), interpolation=interp)
-    rel_y_offset = by / h_step
-    target_y = int(rel_y_offset * 32)
-    target_x = (32 - nw) // 2
-    if target_y + nh > 32:
-        target_y = 32 - nh
-    if target_y < 0:
-        target_y = 0
-    canvas[target_y : target_y + nh, target_x : target_x + nw] = resized
-    return canvas
 
+    # Resize the (cropped) character to fit our training cells
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+    resized = cv2.resize(char_crop, (nw, nh), interpolation=interp)
+
+    # Improve CNN performance by bottom-aligning cells.
+    # Every character is anchored to a fixed baseline (2px from the bottom).
+    target_y = 32 - nh - 2
+    target_x = (32 - nw) // 2
+
+    if target_y < 0: target_y = 0
+    if target_y + nh > 32: nh = 32 - target_y
+
+    # Place the cropped character onto the black canvas
+    canvas[target_y : target_y + nh, target_x : target_x + nw] = resized[:nh, :nw]
+
+    return canvas
 
 def solve_grid_2d(img, gx, gy, gw, gh, num_lines):
     def score_axis(projection, n_segments, start_guess, dim_guess):
