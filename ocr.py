@@ -1,3 +1,4 @@
+#!/usr/bin/env -S uv.exe run
 import os
 import argparse
 import cv2

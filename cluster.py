@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv.exe run
 
 import cv2
 import numpy as np
