@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv.exe run
+from concurrent.futures import ProcessPoolExecutor
 import os
 import argparse
 import cv2
@@ -53,7 +54,7 @@ class YOLO_OCR:
             return
 
         debug = False
-        for i in range(count):
+        def generate_sample(i):
             # Create base canvas
             img = Image.new("RGB", (CANVAS_W, CANVAS_H), (255, 255, 255))
             draw = ImageDraw.Draw(img)
@@ -159,6 +160,10 @@ class YOLO_OCR:
 
             with open(os.path.join(lbl_dir, f"{name}.txt"), "w") as f:
                 f.write("\n".join(labels))
+
+        if __name__ == "__main__":
+            with ProcessPoolExecutor() as executor:
+                executor.map(generate_sample, range(count))
 
     # --- PART 2: TRAINING ---
     def train(self):
