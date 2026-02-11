@@ -21,8 +21,10 @@ DATASET_DIR = "ocr_dataset"
 # MODEL_NAME = "yolo11n.pt" # Latest YOLO version
 MODEL_NAME = "yolo26n.pt"  # Latest YOLO version
 
+
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
 
 class YOLO_OCR:
     def __init__(self, model_path=None):
@@ -50,6 +52,7 @@ class YOLO_OCR:
             print("Font file not found. Please check FONT_PATH.")
             return
 
+        debug = False
         for i in range(count):
             # Create base canvas
             img = Image.new("RGB", (CANVAS_W, CANVAS_H), (255, 255, 255))
@@ -61,7 +64,7 @@ class YOLO_OCR:
             # random.triangular(low, high, mode)
             # text_len = int(random.triangular(10, 85, 72))
             # text_len = int(10 + (80-10) * random.betavariate(2, 1))
-            text_len = int(80 - (random.random() ** 2 * 70))
+            text_len = int(80 - (random.random() ** 2 * 85))
 
             # 40% of the time, fill at least 30% of the slots with confusable characters
             if True and random.random() < 0.65:
@@ -82,33 +85,63 @@ class YOLO_OCR:
             total_w = font.getlength(text)
             curr_x = (CANVAS_W - total_w) // 2
             curr_y = (CANVAS_H - FONT_SIZE) // 2
-            # Introduce a slight shift to curr_y
+
+            # Introduce a slight shift to curr_y and curr_x
             curr_y += random.randint(-8, 8)
             if text_len < 70:
                 curr_x -= random.randint(0, 60)
 
             labels = []
-            ascent, descent = font.getmetrics()
-            font_height = ascent + descent
 
-            for j, char in enumerate(text):
-                char_w = font.getlength(char)
-                if not self.fine_tune:
-                    # Use minimum bbox width for thin chars like 1l/i
-                    # They seem to default to ~4px
-                    char_w = max(char_w, 6)
+            # Draw all the text at once so that kerning is properly applied,
+            # to try and mimic how real-world inputs rendered with Microsoft
+            # Office's GPOS text shaping engine might look.
+            draw.text((curr_x, curr_y), text, font=font, fill=(0, 0, 0))
 
-                # Bounding Box (Normalized)
-                x_center = (curr_x + char_w / 2) / CANVAS_W
-                y_center = (curr_y + font_height / 2) / CANVAS_H
+            # Extract the character bounding boxes for training/val data
+            for i, char in enumerate(text):
+                if char.isspace():
+                    continue
+
+                # Assume the position of character x is the length of the
+                # entire string up to and including x, minus the length
+                # of x itself.
+                prefix_len = font.getlength(text[: i + 1])
+                char_len = font.getlength(char)
+                char_start = curr_x + (prefix_len - char_len)
+
+                # Get character bounding box (left, top, right, bottom)
+                bbox = font.getbbox(char)
+
+                # Get absolute bbox coordinates
+                left = char_start + bbox[0]
+                top = curr_y + bbox[1]
+                right = char_start + bbox[2]
+                bottom = curr_y + bbox[3]
+
+                char_w = right - left
+                char_h = bottom - top
+
+                # Calculate normalized (relative) bounding box
+                x_center = (left + char_w / 2) / CANVAS_W
+                y_center = (top + char_h / 2) / CANVAS_H
                 nw = char_w / CANVAS_W
-                nh = font_height / CANVAS_H
+                nh = char_h / CANVAS_H
                 labels.append(
                     f"{CHAR_TO_IDX[char]} {x_center:.6f} {y_center:.6f} {nw:.6f} {nh:.6f}"
                 )
 
-                draw.text((curr_x, curr_y), char, font=font, fill=(0, 0, 0))
-                curr_x += char_w
+                if debug:
+                    draw.rectangle(
+                        [left - 1, top - 1, right + 1, bottom + 1],
+                        outline="red",
+                        width=1,
+                    )
+
+            if debug:
+                # Show bounding boxes on line
+                img.show()
+                sys.exit()
 
             # Add some synthetic noise and blur to help with jpeg detection
             # if self.fine_tune:
