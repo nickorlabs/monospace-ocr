@@ -7,6 +7,7 @@ import numpy as np
 import random
 import sys
 import torch
+import traceback
 from multiprocess import Pool
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from ultralytics import YOLO
@@ -16,7 +17,14 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
 CHAR_TO_IDX = {char: i for i, char in enumerate(ALPHABET)}
 IDX_TO_CHAR = {i: char for char, i in CHAR_TO_IDX.items()}
 
-FONT_PATH = "times.ttf"  # Update path for Linux/Mac if necessary
+# FONT_PATH = "times.ttf"  # Update path for Linux/Mac if necessary
+# FONT_PATH = "./NimbusRomNo9L-Reg.otf"
+# FONT_PATH = "./texgyretermes-regular.otf"
+FONT_PATHS = [
+    "times.ttf",
+    "./NimbusRomNo9L-Reg.otf",
+    "./texgyretermes-regular.otf",
+]
 FONT_SIZE = 16
 CANVAS_W, CANVAS_H = 800, 64
 DATASET_DIR = "ocr_dataset"
@@ -30,16 +38,28 @@ worker_font = None
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-def load_font():
+def load_font(randomize=False):
+    idx = 0 if not randomize else random.randrange(0, len(FONT_PATHS))
+
     try:
-        return ImageFont.truetype(FONT_PATH, FONT_SIZE)
+        return ImageFont.truetype(FONT_PATHS[idx], FONT_SIZE)
     except:
-        print("Font file not found. Please check FONT_PATH.")
+        print(f"Font file {FONT_PATHS[idx]} not found. Please check FONT_PATHS.")
 
 def init_gen_worker():
     """Runs once when each multiprocess worker starts to init worker resources"""
     global worker_font
-    worker_font = load_font()
+    try:
+        worker_font = load_font(randomize=True)
+        if worker_font is None:
+            raise ValueError("Font failed to load")
+    except Exception:
+        # Manually print and flush because Python sucks and swallows these errors
+        print(f"CRITICAL: Worker init failed in PID {os.getpid()}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        # Kill the process explicitly so the Pool knows it's dead
+        os._exit(1)
 
 def generate_rand_text():
     # Generate random text, oversampling tricky characters
@@ -141,9 +161,6 @@ def generate_sample(text, font, debug=False, add_noise=False):
                 outline="red" if j % 2 == 0 else "green",
                 width=1,
             )
-
-    if dimg is not None:
-        dimg.show()
 
     # Add some synthetic noise and blur to help with jpeg detection
     if add_noise:
