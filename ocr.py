@@ -337,7 +337,7 @@ class YOLO_OCR:
             # annotated_frame = results[0].plot()
             #
             # # Save or display it
-            # cv2.imwrite(f"detected_line.jpg", annotated_frame)
+            # cv2.imwrite(f"detected_line.png", annotated_frame)
 
             # print(results[0].probs)
             # Extract and sort by X-coordinate
