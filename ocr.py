@@ -420,7 +420,7 @@ class YOLO_OCR:
 
         # Perform predictions line-by-line
         full_text = []
-        for y1, y2 in lines:
+        for i, (y1, y2) in enumerate(lines):
             line_img = text_area[y1:y2, :]
             # Convert back to black on white
             line_img = cv2.bitwise_not(line_img)
@@ -473,10 +473,10 @@ class YOLO_OCR:
                 )
 
             raw_boxes.sort(key=lambda b: b["x"])
-            # eprint(json.dumps(boxes))
+            eprint(json.dumps(raw_boxes, indent=4))
 
             line_str = "".join([b["char"] for b in raw_boxes])
-            # eprint(f"Original line: {line_str}")
+            eprint(f"Original line {i}: {line_str}")
 
             # Now try to filter out bad overlaps. We know characters never truly overlap,
             # so if two characters are located in roughly the same position, only take
@@ -486,7 +486,7 @@ class YOLO_OCR:
                 prev = filtered[-1]
 
                 # Check if this box overlaps significantly with the previous
-                if current["x"] - prev["x"] < 3.3:
+                if current["x"] - prev["x"] < 3.5:
                     # Replace the last one if the current is more confident
                     if current["conf"] > prev["conf"]:
                         filtered[-1] = current
@@ -496,6 +496,7 @@ class YOLO_OCR:
                     filtered.append(current)
 
             line_str = "".join([b["char"] for b in filtered])
+            eprint(f"Filtered line {i}: {line_str}")
             full_text.append(line_str)
 
         return "\n".join(full_text)
