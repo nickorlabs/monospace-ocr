@@ -3,7 +3,7 @@ name = "cour"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
     "matplotlib>=3.10.8",
     "multiprocess>=0.70.19",
@@ -11,6 +11,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "scikit-image>=0.26.0",
     "scikit-learn>=1.8.0",
+    "skia-python>=138.0",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "ultralytics>=8.4.13",

@@ -5,6 +5,7 @@ import cv2
 import json
 import numpy as np
 import random
+import skia
 import sys
 import torch
 import traceback
@@ -90,7 +91,111 @@ def generate_rand_text():
 
     return text
 
-def generate_sample(text, font, debug=False, add_noise=False):
+# Use Skia to generate the text, because it uses DirectWrite on Windows
+# so we end up with text that better matches what MS Office outputs.
+def generate_sample_skia(text, font, debug=False, add_noise=False):
+    # Skia uses DirectWrite by default on Windows
+    typeface = skia.Typeface("Times New Roman")
+    if not typeface:
+        raise Exception(f"Font could not be initialized!")
+    font = skia.Font(typeface, FONT_SIZE)
+
+    # Enable subpixel positioning and LCD optimizations (à la DirectWrite and ClearType)
+    font.setSubpixel(random.random() < 0.75)
+    font.setEdging(skia.Font.Edging.kSubpixelAntiAlias)
+
+    # Create base canvas
+    surface = skia.Surface(CANVAS_W, CANVAS_H)
+    canvas = surface.getCanvas()
+    canvas.clear(skia.ColorWHITE)
+
+    # Calculate layout
+    glyphs = font.textToGlyphs(text)
+    widths = font.getWidths(glyphs)
+    total_w = sum(widths)
+
+    # Center text
+    curr_x = (CANVAS_W - total_w) / 2
+    curr_y = (CANVAS_H + FONT_SIZE / 2) / 2
+
+    # Introduce a slight shift to curr_y and curr_x
+    curr_y += random.randint(-8, 8)
+    if len(text) < 70:
+        curr_x -= random.randint(0, 60)
+
+    # Draw all the text at once so that kerning is properly applied,
+    # to try and mimic how real-world inputs rendered with Microsoft
+    # Office's GPOS text shaping engine might look.
+
+    # Try to vary the opacity slightly to be more resilient to variations
+    # in input.
+    v = random.randint(0, 100)
+    paint = skia.Paint(AntiAlias=True, Color=skia.Color(v, v, v))
+    canvas.drawString(text, curr_x, curr_y, font, paint)
+
+    clean_snapshot = surface.makeImageSnapshot()
+    img = Image.fromarray(clean_snapshot.toarray(colorType=skia.kRGB_888x_ColorType)[:, :, :3])
+
+    dimg = None
+    labels = []
+    running_x = curr_x
+
+    # Extract the character bounding boxes for training/val data
+    for i, char in enumerate(text):
+        char_w = widths[i]
+
+        if char.isspace():
+            running_x += char_w
+            continue
+
+        # Get actual glyph bounds
+        glyph_path = font.getPath(glyphs[i])
+        bounds = glyph_path.getBounds()
+
+        # Get absolute bbox coordinates
+        left = running_x + bounds.fLeft
+        top = curr_y + bounds.fTop
+        right = running_x + bounds.fRight
+        bottom = curr_y + bounds.fBottom
+
+        w = right - left
+        h = bottom - top
+
+        # Calculate normalized (relative) bounding box
+        x_center = (left + w / 2) / CANVAS_W
+        y_center = (top + h / 2) / CANVAS_H
+        nw = w / CANVAS_W
+        nh = h / CANVAS_H
+
+        labels.append(
+            f"{CHAR_TO_IDX[char]} {x_center:.6f} {y_center:.6f} {nw:.6f} {nh:.6f}"
+        )
+
+        if debug:
+            # Use alternating colors so we can see which boundary is for which char
+            debug_paint = skia.Paint(
+                Color=skia.ColorRED if i % 2 == 0 else skia.ColorGREEN,
+                Style=skia.Paint.kStroke_Style,
+                StrokeWidth=1
+            )
+            canvas.drawRect(skia.Rect(left, top, right, bottom), debug_paint)
+
+        running_x += char_w
+
+    # If debug, capture the surface after rectangles were drawn
+    if debug:
+        debug_snapshot = surface.makeImageSnapshot()
+        dimg = Image.fromarray(debug_snapshot.toarray(colorType=skia.kRGB_888x_ColorType)[:, :, :3])
+
+    # Add some synthetic noise and blur to help with jpeg detection
+    if add_noise:
+        radius = random.uniform(0.0, 0.2)
+        img = img.filter(ImageFilter.GaussianBlur(radius))
+
+    return img, labels, dimg
+
+# Generate a text sample with PIL, which uses FreeType for text rendering
+def generate_sample_pil(text, font, debug=False, add_noise=False):
     # Create base canvas
     img = Image.new("RGB", (CANVAS_W, CANVAS_H), (255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -172,6 +277,7 @@ def generate_sample(text, font, debug=False, add_noise=False):
 
     return img, labels, dimg
 
+
 class YOLO_OCR:
     def __init__(self, model_path=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -196,7 +302,7 @@ class YOLO_OCR:
         # Generate and save a single train/val image/label pair.
         def inner(i):
             text = generate_rand_text()
-            img, labels, _ = generate_sample(text, font=worker_font)
+            img, labels, _ = generate_sample_skia(text, font=worker_font)
 
             # Save (at slightly lower resolution when fine-tuning)
             fname = f"{split}_{i:05d}"
@@ -401,7 +507,7 @@ if __name__ == "__main__":
 
     if args.sample is not None:
         eprint("Generating sample.png and sample-annotated.png")
-        img, _, dimg = generate_sample(args.sample, font=load_font(), debug=True)
+        img, _, dimg = generate_sample_skia(args.sample, font=load_font(), debug=True)
         img.save("sample.png")
         if dimg is not None:
             dimg.save("sample-annotated.png")
