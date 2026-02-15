@@ -32,12 +32,13 @@ MODEL_NAME = "yolo26n.pt"  # Latest YOLO version
 
 # The shared font resource for each multiprocess worker when generating
 # training and validation data.
-worker_font = None
+worker_font_pil = None
+worker_font_skia = None
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-def load_font(randomize=False):
+def load_font_pil(randomize=False):
     idx = 0 if not randomize else random.randrange(0, len(FONT_PATHS))
 
     try:
@@ -45,13 +46,34 @@ def load_font(randomize=False):
     except:
         print(f"Font file {FONT_PATHS[idx]} not found. Please check FONT_PATHS.")
 
+def load_font_skia(randomize=False):
+    typeface = skia.Typeface("Times New Roman")
+    if not typeface:
+        raise Exception("Skia typeface could not be initialized!")
+    font = skia.Font(typeface, FONT_SIZE)
+    # Enable subpixel positioning and LCD optimizations (à la DirectWrite and ClearType)
+    if randomize:
+        font.setSubpixel(random.random() < 0.75)
+    else:
+        font.setSubpixel(True)
+    font.setEdging(skia.Font.Edging.kSubpixelAntiAlias)
+    return font
+
 def init_gen_worker():
     """Runs once when each multiprocess worker starts to init worker resources"""
-    global worker_font
+
+    global worker_font_pil
+    global worker_font_skia
+
     try:
-        worker_font = load_font(randomize=True)
-        if worker_font is None:
-            raise ValueError("Font failed to load")
+        worker_font_pil = load_font_pil(randomize=True)
+        if worker_font_pil is None:
+            raise ValueError("PIL font failed to load")
+
+        worker_font_skia = load_font_skia(randomize=True)
+        if worker_font_skia is None:
+            raise ValueError("skia font failed to load")
+
     except Exception:
         # Manually print and flush because Python sucks and swallows these errors
         print(f"CRITICAL: Worker init failed in PID {os.getpid()}", file=sys.stderr)
@@ -93,16 +115,9 @@ def generate_rand_text():
 
 # Use Skia to generate the text, because it uses DirectWrite on Windows
 # so we end up with text that better matches what MS Office outputs.
-def generate_sample_skia(text, font, debug=False, add_noise=False):
-    # Skia uses DirectWrite by default on Windows
-    typeface = skia.Typeface("Times New Roman")
-    if not typeface:
-        raise Exception(f"Font could not be initialized!")
-    font = skia.Font(typeface, FONT_SIZE)
-
-    # Enable subpixel positioning and LCD optimizations (à la DirectWrite and ClearType)
-    font.setSubpixel(random.random() < 0.75)
-    font.setEdging(skia.Font.Edging.kSubpixelAntiAlias)
+def generate_sample_skia(text, font=None, debug=False, add_noise=False):
+    if font is None:
+        font = load_font_skia()
 
     # Create base canvas
     surface = skia.Surface(CANVAS_W, CANVAS_H)
@@ -302,7 +317,7 @@ class YOLO_OCR:
         # Generate and save a single train/val image/label pair.
         def inner(i):
             text = generate_rand_text()
-            img, labels, _ = generate_sample_skia(text, font=worker_font)
+            img, labels, _ = generate_sample_skia(text, font=worker_font_skia)
 
             # Save (at slightly lower resolution when fine-tuning)
             fname = f"{split}_{i:05d}"
@@ -507,7 +522,7 @@ if __name__ == "__main__":
 
     if args.sample is not None:
         eprint("Generating sample.png and sample-annotated.png")
-        img, _, dimg = generate_sample_skia(args.sample, font=load_font(), debug=True)
+        img, _, dimg = generate_sample_skia(args.sample, debug=True)
         img.save("sample.png")
         if dimg is not None:
             dimg.save("sample-annotated.png")
